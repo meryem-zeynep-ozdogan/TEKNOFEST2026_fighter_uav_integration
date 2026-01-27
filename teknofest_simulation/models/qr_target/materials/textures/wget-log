@@ -1,0 +1,11 @@
+--2026-01-27 18:48:52--  https://api.qrserver.com/v1/create-qr-code/?data=Teknofest2026
+Resolving api.qrserver.com (api.qrserver.com)... 195.201.128.178, 95.216.163.127, 88.99.85.235, ...
+Connecting to api.qrserver.com (api.qrserver.com)|195.201.128.178|:443... connected.
+HTTP request sent, awaiting response... 200 OK
+Length: unspecified [image/png]
+Saving to: ‘qr.png’
+
+qr.png                  [<=>                 ]       0  --.-KB/s               qr.png                  [ <=>                ]     389  --.-KB/s    in 0s      
+
+2026-01-27 18:48:53 (360 MB/s) - ‘qr.png’ saved [389]
+

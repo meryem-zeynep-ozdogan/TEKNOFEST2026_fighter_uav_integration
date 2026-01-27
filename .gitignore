@@ -1,0 +1,35 @@
+# IDE & Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Build & Compiled
+build/
+install/
+log/
+*.pyc
+__pycache__/
+*.so
+*.o
+
+# ROS2
+*.bag
+*.db3
+
+# Python
+*.egg-info/
+.pytest_cache/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+nohup.out
+
+# Temporary
+/tmp/
+*.tmp

@@ -1,0 +1,10 @@
+{
+  "zones": [
+    {
+      "id": "HSS_1",
+      "name": "arena_center",
+      "center": [38.76410, 30.52360],
+      "radius_m": 40
+    }
+  ]
+}

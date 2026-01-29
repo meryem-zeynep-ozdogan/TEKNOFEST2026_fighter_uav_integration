@@ -49,6 +49,30 @@ def handle_lock_success(data):
     print("[LOCK_SUCCESS] Paket alindi:", data)
 
 
+@socketio.on("external_telemetry")
+def handle_external_telemetry(data):
+    """
+    PX4'ten gelen gerçek İHA telemetri verilerini al ve yayınla.
+    Bu event, px4_to_mock_bridge node'u tarafından gönderilir.
+    """
+    telemetry = {
+        "id": data.get("id", "unknown"),
+        "lat": data.get("lat", 0.0),
+        "lon": data.get("lon", 0.0),
+        "alt": data.get("alt", 0.0),
+        "vx": data.get("vx", 0.0),
+        "vy": data.get("vy", 0.0),
+        "vz": data.get("vz", 0.0),
+        "yaw": data.get("yaw", 0.0),
+        "speed": data.get("speed", 0.0),
+        "timestamp": data.get("timestamp", 0.0),
+        "status": data.get("status", "ACTIVE")
+    }
+    
+    # Tüm client'lara yayınla
+    socketio.emit("telemetry", telemetry)
+
+
 def broadcast(gen, uav_id, stop_flag):
     try:
         for msg in gen:

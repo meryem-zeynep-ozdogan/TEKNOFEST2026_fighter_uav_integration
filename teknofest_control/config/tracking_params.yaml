@@ -1,0 +1,98 @@
+# GPS Tracking Node Konfigürasyonu
+# ================================
+# TEKNOFEST Savaşan İHA Yarışması için optimize edilmiş parametreler
+
+gps_tracking_node:
+  ros__parameters:
+    # ==========================================
+    # HEDEF SEÇİM AĞIRLIKLARI (Weighted Scoring)
+    # ==========================================
+    # Toplam ağırlık = 1.0 olmalı (normalize edilmiş)
+    weights:
+      distance: 0.35        # W1: Mesafe ağırlığı (yakın hedef tercih)
+      angle: 0.45           # W2: Açı uygunluğu ağırlığı (kuyruk açısı bonus)
+      speed: 0.20           # W3: Hız faktörü ağırlığı (yavaş hedef tercih)
+    
+    # Açı Uygunluğu Parametreleri
+    angle_scoring:
+      tail_angle_bonus: 2.5       # Kuyruk açısındayken çarpan (arkadayken)
+      head_on_penalty: 0.2        # Kafa kafaya gelince çarpan (tehlikeli)
+      tail_cone_half_angle: 45.0  # Kuyruk konisi yarı açısı (derece)
+      head_on_cone_half_angle: 30.0  # Tehlikeli kafa kafaya koni yarı açısı
+    
+    # ==========================================
+    # L1 GUIDANCE PARAMETRELERİ
+    # ==========================================
+    l1_guidance:
+      l1_distance: 50.0           # L1 referans mesafesi (metre) - hedefin gerisinde
+      l1_damping: 0.85            # Sönümleme faktörü (0.7-0.9 arası)
+      min_l1_distance: 30.0       # Minimum L1 mesafesi
+      max_l1_distance: 100.0      # Maksimum L1 mesafesi
+      adaptive_l1: true           # Hıza bağlı adaptif L1
+      l1_period: 25.0             # L1 periyodu (saniye) - tepki hızı
+    
+    # ==========================================
+    # UÇUŞ FİZİĞİ SINIRLARI (Sabit Kanat)
+    # ==========================================
+    aircraft_limits:
+      min_airspeed: 15.0          # Minimum hava hızı (m/s) - stall'dan kaçınma
+      max_airspeed: 35.0          # Maksimum hava hızı (m/s)
+      cruise_airspeed: 22.0       # Cruise hızı (m/s)
+      max_bank_angle: 45.0        # Maksimum yatış açısı (derece)
+      max_climb_rate: 5.0         # Maksimum tırmanma hızı (m/s)
+      max_descent_rate: 8.0       # Maksimum alçalma hızı (m/s)
+      min_turn_radius: 30.0       # Minimum dönüş yarıçapı (metre)
+      loiter_radius: 40.0         # Loiter dönüş yarıçapı (metre)
+    
+    # ==========================================
+    # SMOOTH KONTROL FİLTRELERİ
+    # ==========================================
+    # Bu parametreler ani manevraları önler
+    smoothing:
+      heading_rate_limit: 15.0     # Maksimum heading değişim hızı (derece/saniye)
+      altitude_rate_limit: 3.0     # Maksimum irtifa değişim hızı (m/s)
+      speed_rate_limit: 2.0        # Maksimum hız değişimi (m/s²)
+      lpf_cutoff_heading: 0.5      # Low-pass filter cutoff (Hz) - heading
+      lpf_cutoff_altitude: 0.3     # Low-pass filter cutoff (Hz) - altitude
+      command_smoothing_alpha: 0.15 # Exponential smoothing faktörü (0.1-0.3)
+    
+    # ==========================================
+    # TAKİP DURUM MAKİNESİ
+    # ==========================================
+    state_machine:
+      # Mesafe eşikleri (metre)
+      lock_distance: 80.0          # Kilitlenme başlama mesafesi
+      approach_distance: 150.0     # Yaklaşma fazı mesafesi
+      loiter_trigger_distance: 10.0  # Loiter tetikleme (çok yakın)
+      lost_target_distance: 300.0  # Hedef kayıp sayılma mesafesi
+      
+      # Zaman eşikleri (saniye)
+      lock_confirmation_time: 4.0  # Kilitlenme onay süresi (yarışma kuralı)
+      target_switch_cooldown: 3.0  # Hedef değiştirme bekleme süresi
+      lost_target_timeout: 5.0     # Hedef kayıp timeout
+    
+    # ==========================================
+    # RÜZGAR TAHMİNİ
+    # ==========================================
+    wind_estimation:
+      enable_wind_correction: true
+      wind_filter_alpha: 0.05      # Rüzgar tahmini smoothing
+      max_crab_angle: 20.0         # Maksimum yengeç açısı (derece)
+    
+    # ==========================================
+    # PX4 İLETİŞİM
+    # ==========================================
+    px4:
+      control_frequency: 50.0      # Kontrol döngüsü frekansı (Hz)
+      offboard_timeout: 0.5        # Offboard heartbeat timeout (saniye)
+      trajectory_setpoint_mode: true  # true: Velocity, false: Position
+    
+    # ==========================================
+    # GÜVENLİK PARAMETRELERİ
+    # ==========================================
+    safety:
+      min_altitude_agl: 50.0       # Minimum yer üstü irtifa (metre)
+      max_altitude_agl: 400.0      # Maksimum yer üstü irtifa (metre)
+      geofence_radius: 2000.0      # Geofence yarıçapı (metre)
+      collision_avoidance_distance: 15.0  # Çarpışma önleme mesafesi
+      emergency_climb_rate: 3.0    # Acil tırmanma hızı (m/s)

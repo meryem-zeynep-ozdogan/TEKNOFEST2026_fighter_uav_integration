@@ -1,5 +1,11 @@
 # server/ws_server.py
 
+import sys
+import os
+
+# Parent dizini (mock/) Python path'e ekle - scenarios modülünü bulmak için
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from gevent import sleep
 from math import radians, sin, cos, sqrt, atan2
 
@@ -31,7 +37,12 @@ def haversine(lat1, lon1, lat2, lon2):
     return R * c
 
 
-HSS = load_hss_polygons("config/hss_zones.json")
+# Config dosyası için doğru path - script'in bulunduğu dizine göre
+_SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+_MOCK_DIR = os.path.dirname(_SCRIPT_DIR)
+_CONFIG_PATH = os.path.join(_MOCK_DIR, "config", "hss_zones.json")
+
+HSS = load_hss_polygons(_CONFIG_PATH)
 first_zone = list(HSS.values())[0]
 HSS_CENTER = (first_zone["center"][0], first_zone["center"][1])
 HSS_RADIUS = first_zone["radius_m"]
@@ -271,5 +282,5 @@ def api_takeoff():
 # RUN
 # -------------------------------------------------------------------
 if __name__ == "__main__":
-    print("[SERVER] Mock Sunucu (WS + HTTP) basliyor ws://127.0.0.1:8000  |  http://127.0.0.1:8000")
-    socketio.run(app, host="0.0.0.0", port=8000, debug=False)
+    print("[SERVER] Mock Sunucu (WS + HTTP) basliyor ws://127.0.0.1:8080  |  http://127.0.0.1:8080")
+    socketio.run(app, host="0.0.0.0", port=8080, debug=False)

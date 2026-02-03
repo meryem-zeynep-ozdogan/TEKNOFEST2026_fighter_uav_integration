@@ -62,7 +62,7 @@ class MockServerBridge(Node):
         self.get_logger().info("=" * 60)
         
         # Parametreler
-        self.declare_parameter('server_url', 'http://localhost:8000')
+        self.declare_parameter('server_url', 'http://localhost:8080')
         self.declare_parameter('hero_id', 'bizim_iha')
         self.declare_parameter('publish_rate', 10.0)
         

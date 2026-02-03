@@ -1,0 +1,116 @@
+# ================================================================================
+# MOCK TARGET TRACKING PARAMETERS
+# ================================================================================
+# Mock sunucudan hedef takip sistemi için parametre dosyası
+#
+# Kullanım:
+#   ros2 launch teknofest_control mock_tracking.launch.py
+#   veya
+#   ros2 run teknofest_control nearest_target_tracker --ros-args --params-file config/mock_tracking_params.yaml
+# ================================================================================
+
+# -----------------------------------------------------------------------------
+# MOCK TARGET RECEIVER NODE PARAMETRELERİ
+# -----------------------------------------------------------------------------
+mock_target_receiver:
+  ros__parameters:
+    # Mock sunucu WebSocket URL'si
+    mock_server_url: "http://localhost:8080"
+    
+    # Hedef zaman aşımı (saniye) - bu süreden fazla güncelleme gelmezse hedef silinir
+    target_timeout_sec: 5.0
+    
+    # ROS topic yayın hızı (Hz)
+    publish_rate_hz: 20.0
+    
+    # Kendi uçağımızın ID'si - bu ID'li veriler filtrelenir
+    own_uav_id: "bizim_iha"
+    
+    # Bağlantı kesilirse otomatik yeniden bağlan
+    auto_reconnect: true
+    
+    # Yeniden bağlanma gecikmesi (saniye)
+    reconnect_delay_sec: 3.0
+
+
+# -----------------------------------------------------------------------------
+# NEAREST TARGET TRACKER NODE PARAMETRELERİ
+# -----------------------------------------------------------------------------
+nearest_target_tracker:
+  ros__parameters:
+    # Takip hızı (m/s) - uçağın hedef takibi sırasındaki hızı
+    tracking_speed: 15.0
+    
+    # Yaklaşma mesafesi (metre) - bu mesafeden yakın olunca APPROACHING durumuna geçer
+    approach_distance: 50.0
+    
+    # Kilit mesafesi (metre) - bu mesafeden yakın olunca LOCKED durumuna geçer
+    lock_distance: 20.0
+    
+    # İrtifa ofseti (metre) - hedefin irtifasına eklenecek değer
+    altitude_offset: 0.0
+    
+    # Maksimum bank açısı (derece) - viraj sırasında maksimum yatış açısı
+    max_bank_angle: 30.0
+    
+    # Kontrol döngüsü hızı (Hz)
+    update_rate_hz: 20.0
+    
+    # Hedef tahmin süresi (saniye) - lead pursuit için
+    prediction_time: 1.0
+    
+    # PX4 offboard modu aktif et
+    enable_offboard: true
+    
+    # Kendi uçağımızın namespace'i (boş = varsayılan)
+    own_uav_namespace: ""
+
+
+# -----------------------------------------------------------------------------
+# PX4 TO MOCK BRIDGE NODE PARAMETRELERİ
+# -----------------------------------------------------------------------------
+px4_to_mock_bridge:
+  ros__parameters:
+    # Mock sunucu URL'si
+    mock_server_url: "http://localhost:8080"
+    
+    # Rakip İHA instance ID'leri (PX4 SITL)
+    enemy_instance_ids: [1, 2]
+    
+    # Yayın hızı (Hz)
+    publish_rate_hz: 10.0
+    
+    # Otomatik yeniden bağlan
+    auto_reconnect: true
+
+
+# -----------------------------------------------------------------------------
+# GPS TRACKING NODE PARAMETRELERİ (Gelişmiş takip için)
+# -----------------------------------------------------------------------------
+gps_tracking_node:
+  ros__parameters:
+    # L1 Guidance Parametreleri
+    l1_distance: 50.0           # L1 mesafesi (metre)
+    l1_damping: 0.75            # Sönümleme faktörü
+    
+    # Hız Limitleri
+    min_airspeed: 10.0          # Minimum hava hızı (m/s)
+    max_airspeed: 25.0          # Maksimum hava hızı (m/s)
+    cruise_airspeed: 15.0       # Seyir hızı (m/s)
+    
+    # İrtifa Kontrolü
+    min_altitude: 50.0          # Minimum irtifa (metre, AGL)
+    max_altitude: 200.0         # Maksimum irtifa (metre, AGL)
+    altitude_tolerance: 5.0     # İrtifa toleransı (metre)
+    
+    # Takip Parametreleri
+    lock_angle_threshold: 15.0  # Kilit açı eşiği (derece)
+    lock_distance_threshold: 30.0  # Kilit mesafe eşiği (metre)
+    
+    # Güvenlik
+    collision_avoidance_enabled: true
+    min_separation_distance: 20.0  # Minimum ayırma mesafesi (metre)
+    
+    # Debug
+    debug_mode: false
+    log_level: "info"

@@ -19,17 +19,66 @@ Bu paket, TEKNOFEST Savaşan İHA yarışması için geliştirilmiş **L1 Adapti
 ```
 teknofest_control/
 ├── config/
-│   └── tracking_params.yaml      # Tüm parametreler
+│   ├── tracking_params.yaml          # Ana takip parametreleri
+│   └── mock_tracking_params.yaml     # Mock sunucu takip parametreleri
 ├── launch/
-│   └── tracking.launch.py        # Launch dosyası
+│   ├── tracking.launch.py            # Ana takip launch dosyası
+│   └── mock_tracking.launch.py       # Mock sunucu takip launch dosyası
+├── scripts/
+│   └── start_mock_tracking.sh        # Hızlı başlatma scripti
 ├── teknofest_control/
 │   ├── __init__.py
-│   ├── gps_tracking_node.py      # Ana takip node'u
-│   ├── guidance_algorithms.py    # L1 Guidance modülü
-│   ├── smooth_control.py         # Filtre ve rate limiterlar
+│   ├── gps_tracking_node.py          # Ana takip node'u
+│   ├── mock_target_receiver.py       # Mock sunucudan hedef alıcı
+│   ├── nearest_target_tracker.py     # En yakın hedef takipçisi
+│   ├── px4_to_mock_bridge.py         # PX4→Mock köprüsü
+│   └── mock_server_bridge.py         # Mock sunucu köprüsü
 ├── package.xml
 ├── setup.py
 └── README.md
+```
+
+## 🌐 Mock Sunucu Entegrasyonu
+
+Mock sunucudan (ws://localhost:8080) hedef uçak verilerini almak ve GPS tabanlı takip yapmak için:
+
+### Hızlı Başlatma
+
+```bash
+# 1. Mock sunucuyu başlat (ayrı terminalde)
+cd ~/teknofest_ws/src/mock/server
+python ws_server.py
+
+# 2. ROS2 takip sistemini başlat
+ros2 launch teknofest_control mock_tracking.launch.py
+```
+
+### Node'lar ve Topic'ler
+
+#### mock_target_receiver (Hedef Alıcı)
+| Topic | Tip | Açıklama |
+|-------|-----|----------|
+| `/mock/all_targets` | String | Tüm hedefler (JSON) |
+| `/mock/target_count` | Int32 | Aktif hedef sayısı |
+| `/mock/target/{id}/pose` | PoseStamped | Hedef pozisyonu |
+| `/mock/target/{id}/velocity` | TwistStamped | Hedef hızı |
+
+#### nearest_target_tracker (Takipçi)
+| Topic | Tip | Açıklama |
+|-------|-----|----------|
+| `/tracker/nearest_target` | String | En yakın hedef bilgisi |
+| `/tracker/distance_to_target` | Float64 | Hedefe mesafe (m) |
+| `/tracker/state` | String | Takip durumu |
+| `/fmu/in/trajectory_setpoint` | TrajectorySetpoint | PX4 konum komutu |
+
+### Parametreler
+
+```bash
+# Özel parametrelerle başlat
+ros2 launch teknofest_control mock_tracking.launch.py \
+    mock_server_url:=http://localhost:8080 \
+    tracking_speed:=20.0 \
+    lock_distance:=15.0
 ```
 
 ## 🚀 Kurulum

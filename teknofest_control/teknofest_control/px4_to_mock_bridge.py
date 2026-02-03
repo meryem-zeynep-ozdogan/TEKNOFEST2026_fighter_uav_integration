@@ -52,7 +52,7 @@ class PX4ToMockBridge(Node):
         super().__init__('px4_to_mock_bridge')
         
         # Parametreler
-        self.declare_parameter('mock_server_url', 'http://localhost:8000')
+        self.declare_parameter('mock_server_url', 'http://localhost:8080')
         self.declare_parameter('enemy_instance_ids', [1, 2])  # Rakip İHA instance ID'leri
         self.declare_parameter('publish_rate_hz', 10.0)
         self.declare_parameter('auto_reconnect', True)

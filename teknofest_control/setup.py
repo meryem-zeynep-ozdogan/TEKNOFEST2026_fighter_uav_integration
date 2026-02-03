@@ -7,12 +7,8 @@ package_name = 'teknofest_control'
 setup(
     name=package_name,
     version='1.0.0',
-    packages=[],  # Düz yapı - modül yok
-    py_modules=[
-        'gps_tracking_node',
-        'mock_server_bridge',
-        'px4_to_mock_bridge',
-    ],
+    packages=[package_name],  # Düz yapı - modül yok
+  
     data_files=[
         ('share/ament_index/resource_index/packages',
             ['resource/' + package_name]),
@@ -24,18 +20,24 @@ setup(
         (os.path.join('share', package_name, 'config'), 
          glob(os.path.join('config', '*.yaml'))),
     ],
-    install_requires=['setuptools', 'numpy', 'scipy'],
+    install_requires=[
+        'setuptools',
+        'python-socketio[client]',
+        'numpy',
+        'scipy',
+    ],
     zip_safe=True,
-    maintainer='HAVK Team',
-    maintainer_email='teknofest@havk.team',
-    description='TEKNOFEST Savaşan İHA - GPS Takip ve Kontrol Sistemi',
+    maintainer='havk',
+    maintainer_email='mailin@example.com',
+    description='Teknofest Kontrol Paketi',
     license='Apache-2.0',
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'gps_tracking_node = gps_tracking_node:main',
-            'mock_server_bridge = mock_server_bridge:main',
-            'px4_to_mock_bridge = px4_to_mock_bridge:main',
+            'gps_tracking_node = teknofest_control.gps_tracking_node:main',
+            'mock_server_bridge = teknofest_control.mock_server_bridge:main',
+            'px4_to_mock_bridge = teknofest_control.px4_to_mock_bridge:main',
+            'mock_target_receiver = teknofest_control.mock_target_receiver:main',
         ],
     },
 )

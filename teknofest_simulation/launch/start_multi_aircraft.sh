@@ -231,11 +231,11 @@ sleep 15  # İlk uçak için daha uzun bekle
 # ENEMY 1 (KOUSTECH) - Sağda
 launch_aircraft 1     "ENEMY1"  -5   10   0.3    0.698     "rc_cessna"
 sleep 10
-
+#6.1-5.1
 # ENEMY 2 (ITU_ATA) - Solda
 launch_aircraft 2     "ENEMY2"  5   -10   0.3    0.698     "rc_cessna"
 sleep 10
-
+#12.3-10.3
 # Model kontrolü
 echo -e "${YELLOW}[5/5]${NC} Modeller kontrol ediliyor..."
 wait_for_models

@@ -248,13 +248,23 @@ class TargetScore:
 class GuidanceCommand:
     """
     L1 Guidance çıktısı - Kontrol komutları
+    Position Setpoint modu için NED koordinatları kullanılır.
     """
-    velocity_north: float = 0.0     # Kuzey hızı komutu (m/s)
-    velocity_east: float = 0.0      # Doğu hızı komutu (m/s)
-    velocity_down: float = 0.0      # Aşağı hızı komutu (m/s)
+    # Position setpoints (NED frame - metre)
+    position_north: float = 0.0     # Kuzey pozisyonu (m)
+    position_east: float = 0.0      # Doğu pozisyonu (m)
+    position_down: float = 0.0      # Aşağı pozisyonu (m, negatif = yukarı)
+    
+    # Velocity setpoints (opsiyonel, NaN olarak gönderilecek)
+    velocity_north: float = float('nan')  # Kuzey hızı komutu (m/s)
+    velocity_east: float = float('nan')   # Doğu hızı komutu (m/s)
+    velocity_down: float = float('nan')   # Aşağı hızı komutu (m/s)
+    
+    # Yaw ve airspeed
     yaw_setpoint: float = 0.0       # Yaw açısı (radyan)
-    yaw_rate: float = 0.0           # Yaw hızı (rad/s)
+    yaw_rate: float = float('nan')  # Yaw hızı (rad/s)
     airspeed_setpoint: float = 0.0  # Hava hızı komutu (m/s)
+    
     is_valid: bool = False
 
 
@@ -289,7 +299,7 @@ class StateMachineParams:
     """Durum makinesi parametreleri"""
     lock_distance: float = 80.0         # Kilit mesafesi (metre)
     approach_distance: float = 150.0    # Yaklaşma mesafesi (metre)
-    loiter_trigger: float = 25.0        # Loiter tetikleme mesafesi (metre)
+    loiter_trigger: float = 15.0        # Yakın takip tetikleme mesafesi (metre)
     lock_confirm_time: float = 4.0      # Kilit onay süresi (saniye)
     target_timeout: float = 5.0         # Hedef zaman aşımı (saniye)
 
@@ -778,20 +788,26 @@ class TrackingStateMachine:
                 self._change_state(TrackingState.SEARCHING)
         
         elif self.current_state == TrackingState.PURSUING:
-            if distance < p.loiter_trigger:
-                self._change_state(TrackingState.LOITERING)
-            elif distance < p.lock_distance * 0.8:
+            # Öncelik: Kilit mesafesine girdiyse LOCKED'a geç
+            if distance < p.lock_distance * 0.8:
                 self._change_state(TrackingState.LOCKED)
                 self.lock_start_time = current_time
+            elif distance < p.loiter_trigger:
+                # Çok yakınsa tehlikeli - loiter'a geç
+                self._change_state(TrackingState.LOITERING)
             elif distance > p.lock_distance * 1.3:
+                # Hedef uzaklaştıysa yaklaşmaya geri dön
                 self._change_state(TrackingState.APPROACHING)
         
         elif self.current_state == TrackingState.LOCKED:
+            # LOCKED durumunda hedef mesafesini takip et
             if distance > p.lock_distance * 1.5:
+                # Hedef çok uzaklaştı - takibe devam
                 self._change_state(TrackingState.PURSUING)
                 self.lock_start_time = None
                 self.lock_confirmed = False
             elif distance < p.loiter_trigger:
+                # Çok yaklaştık - loiter'a geç
                 self._change_state(TrackingState.LOITERING)
             else:
                 # Kilit onay kontrolü
@@ -874,9 +890,9 @@ class L1GuidanceController:
         target_pos = target.get_position_ned()
         target_vel = target.get_velocity_vector()
         
-        # Loiter modunda farklı komut
+        # Loiter modunda hedefin arkasında yakın takip
         if tracking_state == TrackingState.LOITERING:
-            return self._generate_loiter_command(own_pos, target_pos)
+            return self._generate_tail_chase_command(own_pos, own_vel, target_pos, target_vel)
         
         # 1. SANAL HEDEF NOKTASI HESAPLA
         target_speed = float(np.linalg.norm(target_vel[:2]))
@@ -949,10 +965,10 @@ class L1GuidanceController:
                                       -math.radians(20), 
                                       math.radians(20)))
         
-        # 5. KOMUT OLUŞTUR
+        # 5. KOMUT OLUŞTUR (Position Setpoint)
         desired_heading = los_angle + self.crab_angle
         
-        # Hız büyüklüğü
+        # Hız büyüklüğü (airspeed için)
         if los_distance > 100:
             speed_cmd = p.max_airspeed
         elif los_distance > 50:
@@ -967,48 +983,79 @@ class L1GuidanceController:
         speed_cmd = float(np.clip(speed_cmd, p.min_airspeed, p.max_airspeed))
         
         command = GuidanceCommand(is_valid=True)
-        command.velocity_north = speed_cmd * math.cos(desired_heading)
-        command.velocity_east = speed_cmd * math.sin(desired_heading)
         
-        altitude_error = target_pos[2] - own_pos[2]
-        command.velocity_down = float(np.clip(-altitude_error * 0.5, -3.0, 3.0))
+        # POSITION SETPOINT - Sanal hedef noktasına git
+        command.position_north = float(self.virtual_target[0])
+        command.position_east = float(self.virtual_target[1])
+        # İrtifa: Hedefle aynı irtifada uç
+        command.position_down = float(target_pos[2])
         
         command.yaw_setpoint = desired_heading
         command.airspeed_setpoint = speed_cmd
         
         return command
     
-    def _generate_loiter_command(self, own_pos: np.ndarray, 
-                                  center: np.ndarray) -> GuidanceCommand:
+    def _generate_tail_chase_command(self, own_pos: np.ndarray,
+                                       own_vel: np.ndarray,
+                                       target_pos: np.ndarray,
+                                       target_vel: np.ndarray) -> GuidanceCommand:
         """
-        Loiter (dönme) komutu oluştur
+        Hedefin arkasında yakın takip komutu oluştur (Tail Chase)
+        
+        Hedefin arkasındaki sanal noktaya yönelir ve irtifa eşitlemesi yapar.
+        Amaç: Hedefi kamera görüşüne almak için arkasında kalmak.
         """
         p = self.params
         command = GuidanceCommand(is_valid=True)
         
-        to_center = center[:2] - own_pos[:2]
-        dist_to_center = float(np.linalg.norm(to_center))
+        # Hedefin hız yönü
+        target_speed = float(np.linalg.norm(target_vel[:2]))
         
-        if dist_to_center > 0.1:
-            radial_unit = to_center / dist_to_center
-            tangent_unit = np.array([-radial_unit[1], radial_unit[0]])
+        if target_speed > 0.5:
+            # Hedefin hareket yönü (birim vektör)
+            target_heading_vec = target_vel[:2] / target_speed
+            
+            # Hedefin arkasındaki sanal nokta (tail_distance kadar geride)
+            tail_distance = 25.0  # Hedefin 25m arkasında kal
+            tail_point = target_pos[:2] - tail_distance * target_heading_vec
         else:
-            tangent_unit = np.array([1.0, 0.0])
-            radial_unit = np.array([0.0, 1.0])
+            # Hedef duruyorsa, direkt hedefe yönel
+            tail_point = target_pos[:2]
+            target_heading_vec = np.array([1.0, 0.0])
         
-        radius_error = dist_to_center - p.loiter_radius
+        # Sanal noktaya olan vektör
+        to_tail = tail_point - own_pos[:2]
+        dist_to_tail = float(np.linalg.norm(to_tail))
         
-        tangent_speed = p.cruise_airspeed
-        radial_correction = radius_error * 0.3
+        if dist_to_tail > 1.0:
+            # Sanal noktaya yönelme açısı
+            desired_heading = math.atan2(to_tail[1], to_tail[0])
+            
+            # Hız büyüklüğü - uzaktaysa hızlan, yakınsa yavaşla
+            if dist_to_tail > 50:
+                speed_cmd = p.max_airspeed
+            elif dist_to_tail > 20:
+                # Hedef hızının biraz üstünde ol (yakalamak için)
+                speed_cmd = max(target_speed + 5.0, p.cruise_airspeed)
+            else:
+                # Çok yakınsa hedef hızına eşitle (arkasında kal)
+                speed_cmd = max(target_speed, p.min_airspeed)
+            
+            speed_cmd = float(np.clip(speed_cmd, p.min_airspeed, p.max_airspeed))
+        else:
+            # Sanal noktanın üzerindeysek, hedefin yönünde devam et
+            desired_heading = math.atan2(target_heading_vec[1], target_heading_vec[0])
+            speed_cmd = max(target_speed, p.cruise_airspeed)
+            speed_cmd = float(np.clip(speed_cmd, p.min_airspeed, p.max_airspeed))
         
-        velocity_2d = tangent_speed * tangent_unit + \
-                      radial_correction * radial_unit
+        # POSITION SETPOINT - Hedefin arkasındaki sanal noktaya git
+        command.position_north = float(tail_point[0])
+        command.position_east = float(tail_point[1])
+        # İRTİFA EŞİTLEMESİ - Hedefle aynı irtifada uç
+        command.position_down = float(target_pos[2])
         
-        command.velocity_north = float(velocity_2d[0])
-        command.velocity_east = float(velocity_2d[1])
-        command.velocity_down = 0.0
-        command.yaw_setpoint = math.atan2(velocity_2d[1], velocity_2d[0])
-        command.airspeed_setpoint = tangent_speed
+        command.yaw_setpoint = desired_heading
+        command.airspeed_setpoint = speed_cmd
         
         return command
     

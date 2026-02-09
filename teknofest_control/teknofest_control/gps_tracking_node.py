@@ -5,9 +5,6 @@ TEKNOFEST SAVAŞAN İHA - GPS TAKİP NODE'U
 ================================================================================
 L1 Adaptive Guidance ile Gelişmiş Hedef Takip Sistemi
 
-Yazar: HAVK Takımı
-Tarih: 2026
-Lisans: Apache-2.0
 
 Bu node şu görevleri yerine getirir:
 1. PX4 ile ROS2 arasında köprü görevi görür
@@ -33,6 +30,7 @@ from typing import Dict
 from collections import deque
 import math
 import json
+import numpy as np
 
 # ============================================================================
 # L1 GUIDANCE MODÜLÜ (ROS2 Bağımsız)
@@ -117,7 +115,7 @@ class GPSTrackingNode(Node):
         # PX4-ROS2 bridge için Best Effort QoS gerekli
         self.px4_qos = QoSProfile(
             reliability=ReliabilityPolicy.BEST_EFFORT,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,  # PX4 için VOLATILE olmalı
             history=HistoryPolicy.KEEP_LAST,
             depth=10
         )
@@ -141,6 +139,12 @@ class GPSTrackingNode(Node):
         self.home_lon: float = 0.0
         self.home_alt: float = 0.0
         self.home_set: bool = False
+        
+        # Offboard mod kontrolü
+        self.offboard_setpoint_counter: int = 0  # PX4 en az 100 setpoint bekler
+        self.offboard_mode_active: bool = False
+        self.armed: bool = False
+        self.vehicle_status_received: bool = False
         
         # ====================================================================
         # L1 GUIDANCE MODÜLÜ
@@ -197,9 +201,16 @@ class GPSTrackingNode(Node):
             self.status_report_callback
         )
         
+        # Bağlantı durumu kontrolü (başlangıçta)
+        self.connection_check_timer = self.create_timer(
+            5.0,  # 5 saniyede bir
+            self._check_px4_connection
+        )
+        
         self.get_logger().info("GPS Takip Node'u başarıyla başlatıldı!")
         self.get_logger().info(f"Kontrol frekansı: {self.control_frequency} Hz")
         self.get_logger().info(f"L1 Mesafesi: {self.l1_distance} m")
+        self.get_logger().info("📡 PX4 bağlantısı bekleniyor...")
     
     # ========================================================================
     # PARAMETRE YÖNETİMİ
@@ -251,6 +262,11 @@ class GPSTrackingNode(Node):
         # Güvenlik
         self.declare_parameter('safety.min_altitude_agl', 50.0)
         self.declare_parameter('safety.collision_avoidance_distance', 15.0)
+        
+        # Namespace ayarları (Multi-vehicle PX4 SITL için)
+        self.declare_parameter('namespaces.own', '')           # Kendi uçağımız (boş = varsayılan)
+        self.declare_parameter('namespaces.target', '/px4_1')  # Hedef uçak namespace
+        self.declare_parameter('namespaces.target_id', 1)      # Hedef uçak ID
     
     def _load_parameters(self):
         """Parametreleri yükle ve değişkenlere ata"""
@@ -298,6 +314,13 @@ class GPSTrackingNode(Node):
         # Güvenlik
         self.min_alt = self.get_parameter('safety.min_altitude_agl').value
         self.collision_dist = self.get_parameter('safety.collision_avoidance_distance').value
+        
+        # Namespace ayarları
+        self.own_namespace = self.get_parameter('namespaces.own').value
+        self.target_namespace = self.get_parameter('namespaces.target').value
+        self.target_id = self.get_parameter('namespaces.target_id').value
+        
+        self.get_logger().info(f"Namespace ayarları: own='{self.own_namespace}', target='{self.target_namespace}'")
     
     def _init_l1_guidance(self):
         """L1 Guidance modülünü başlat"""
@@ -355,10 +378,18 @@ class GPSTrackingNode(Node):
         """Tüm subscriber'ları oluştur"""
         
         if PX4_MSGS_AVAILABLE:
-            # PX4 Lokal Pozisyon
+            # PX4 Lokal Pozisyon (v1 format - yeni PX4)
             self.local_pos_sub = self.create_subscription(
                 VehicleLocalPosition,
                 '/fmu/out/vehicle_local_position',
+                self.vehicle_local_position_callback,
+                self.px4_qos
+            )
+            
+            # Yeni PX4 versiyonları için _v1 suffix'li topic'e de abone ol
+            self.local_pos_v1_sub = self.create_subscription(
+                VehicleLocalPosition,
+                '/fmu/out/vehicle_local_position_v1',
                 self.vehicle_local_position_callback,
                 self.px4_qos
             )
@@ -379,10 +410,18 @@ class GPSTrackingNode(Node):
                 self.px4_qos
             )
             
-            # PX4 Status
+            # PX4 Status (v1 format)
             self.status_sub = self.create_subscription(
                 VehicleStatus,
                 '/fmu/out/vehicle_status',
+                self.vehicle_status_callback,
+                self.px4_qos
+            )
+            
+            # Yeni PX4 versiyonları için _v1 suffix'li topic
+            self.status_v1_sub = self.create_subscription(
+                VehicleStatus,
+                '/fmu/out/vehicle_status_v1',
                 self.vehicle_status_callback,
                 self.px4_qos
             )
@@ -401,6 +440,33 @@ class GPSTrackingNode(Node):
             '/simulation/enemy_aircraft',
             self.enemy_aircraft_callback,
             self.standard_qos
+        )
+        
+        # ================================================================
+        # HEDEF UÇAK SUBSCRIBER'LARI (PX4 SITL Multi-Vehicle)
+        # ================================================================
+        if PX4_MSGS_AVAILABLE and self.target_namespace:
+            target_ns = self.target_namespace
+            
+            # Hedef uçak lokal pozisyon (NED koordinatları + hız)
+            self.target_local_pos_sub = self.create_subscription(
+                VehicleLocalPosition,
+                f'{target_ns}/fmu/out/vehicle_local_position',
+                self.target_vehicle_local_position_callback,
+                self.px4_qos
+            )
+            
+            # Hedef uçak global pozisyon (GPS)
+            self.target_global_pos_sub = self.create_subscription(
+                VehicleGlobalPosition,
+                f'{target_ns}/fmu/out/vehicle_global_position',
+                self.target_vehicle_global_position_callback,
+                self.px4_qos
+            )
+            
+            self.get_logger().info(f"🎯 Hedef uçak subscriber'ları oluşturuldu: {target_ns}")
+            self.get_logger().info(f"   - {target_ns}/fmu/out/vehicle_local_position")
+            self.get_logger().info(f"   - {target_ns}/fmu/out/vehicle_global_position")
         )
         
         self.get_logger().info("Subscriber'lar oluşturuldu")
@@ -472,13 +538,28 @@ class GPSTrackingNode(Node):
         self.own_state.vz = msg.vz
         self.own_state.heading = math.degrees(msg.heading)
         
-        # Home pozisyonunu ayarla
-        if not self.home_set and msg.xy_global:
-            self.home_lat = msg.ref_lat
-            self.home_lon = msg.ref_lon
-            self.home_alt = msg.ref_alt
-            self.home_set = True
-            self.get_logger().info(f"Home pozisyonu ayarlandı: {self.home_lat:.6f}, {self.home_lon:.6f}")
+        # Ground speed hesapla
+        self.own_state.ground_speed = math.sqrt(msg.vx**2 + msg.vy**2)
+        
+        # Home pozisyonunu ayarla - birden fazla yöntem dene
+        if not self.home_set:
+            # Yöntem 1: xy_global ve ref koordinatları varsa
+            if hasattr(msg, 'xy_global') and msg.xy_global:
+                if hasattr(msg, 'ref_lat') and msg.ref_lat != 0.0:
+                    self.home_lat = msg.ref_lat
+                    self.home_lon = msg.ref_lon
+                    self.home_alt = msg.ref_alt if hasattr(msg, 'ref_alt') else 0.0
+                    self.home_set = True
+                    self.get_logger().info(f"✅ Home pozisyonu ayarlandı (ref): {self.home_lat:.6f}, {self.home_lon:.6f}, {self.home_alt:.1f}m")
+            
+            # Yöntem 2: Global position callback'ten gelirse (fallback)
+            # vehicle_global_position_callback içinde ayarlanacak
+        
+        # Debug: İlk veri geldiğinde logla
+        if not hasattr(self, '_local_pos_received'):
+            self._local_pos_received = True
+            self.get_logger().info(f"📍 Local position verisi alındı: x={msg.x:.1f}, y={msg.y:.1f}, z={msg.z:.1f}")
+            self.get_logger().info(f"   xy_global={getattr(msg, 'xy_global', 'N/A')}, z_global={getattr(msg, 'z_global', 'N/A')}")
     
     def vehicle_global_position_callback(self, msg):
         """
@@ -488,6 +569,19 @@ class GPSTrackingNode(Node):
         self.own_state.longitude = msg.lon
         self.own_state.altitude = msg.alt
         self.own_state.timestamp = self.get_clock().now().nanoseconds / 1e9
+        
+        # Fallback: Home pozisyonu hala set edilmemişse ve geçerli GPS varsa
+        if not self.home_set and msg.lat != 0.0 and msg.lon != 0.0:
+            self.home_lat = msg.lat
+            self.home_lon = msg.lon
+            self.home_alt = msg.alt
+            self.home_set = True
+            self.get_logger().info(f"✅ Home pozisyonu ayarlandı (GPS): {self.home_lat:.6f}, {self.home_lon:.6f}, {self.home_alt:.1f}m")
+        
+        # Debug: İlk veri geldiğinde logla
+        if not hasattr(self, '_global_pos_received'):
+            self._global_pos_received = True
+            self.get_logger().info(f"🌍 Global position verisi alındı: lat={msg.lat:.6f}, lon={msg.lon:.6f}, alt={msg.alt:.1f}m")
     
     def vehicle_attitude_callback(self, msg):
         """
@@ -510,9 +604,15 @@ class GPSTrackingNode(Node):
             self.own_state.pitch = math.degrees(math.asin(sinp))
     
     def vehicle_status_callback(self, msg):
-        """PX4 durum bilgisi - gerektiğinde kullanılacak"""
-        # Şimdilik boş, ancak arming durumu vs. kontrol için genişletilebilir
-        _ = msg  # Kullanılmayan parametre uyarısını engelle
+        """PX4 durum bilgisi - arming ve mod kontrolü için"""
+        self.vehicle_status_received = True
+        self.armed = msg.arming_state == 2  # ARMING_STATE_ARMED = 2
+        
+        # Nav state kontrolü - NAVIGATION_STATE_OFFBOARD = 14
+        if msg.nav_state == 14:
+            self.offboard_mode_active = True
+        else:
+            self.offboard_mode_active = False
     
     def target_list_callback(self, msg):
         """
@@ -610,14 +710,33 @@ class GPSTrackingNode(Node):
         Ana kontrol döngüsü - L1Guidance modülünü çağırır
         
         Bu callback sadece:
-        1. Eski hedefleri temizler
-        2. L1Guidance.update() çağırır
-        3. Komutu PX4'e yayınlar
+        1. Home pozisyonu ve offboard mod kontrolü
+        2. Eski hedefleri temizler
+        3. L1Guidance.update() çağırır
+        4. Komutu PX4'e yayınlar
         
         Tüm hedef seçimi, durum makinesi ve guidance mantığı
         l1_guidance.py modülündedir.
         """
         current_time = self.get_clock().now().nanoseconds / 1e9
+        
+        # ----------------------------------------------------------------
+        # 0. ÖN KOŞUL KONTROLLERİ
+        # ----------------------------------------------------------------
+        # Home pozisyonu ayarlanmadan NED dönüşümleri yapılamaz
+        # AMA offboard için setpoint göndermeye devam etmeliyiz!
+        if not self.home_set:
+            if self.offboard_setpoint_counter % 50 == 0:
+                self.get_logger().warn("⏳ Home pozisyonu bekleniyor... (setpoint gönderiliyor)")
+            # Home olmadan da dummy setpoint gönder (offboard geçişi için gerekli)
+            self._publish_safe_loiter_command()
+            return
+        
+        # Offboard mod aktif değilse sadece loiter/safe modda bekle
+        if not self.offboard_mode_active and self.offboard_setpoint_counter > 200:
+            if self.offboard_setpoint_counter % 100 == 0:
+                self.get_logger().warn("⚠️ Offboard mod aktif değil, yeniden deneniyor...")
+                self._engage_offboard_mode()
         
         # ----------------------------------------------------------------
         # 1. ESKİ HEDEFLERİ TEMİZLE (timeout)
@@ -644,6 +763,9 @@ class GPSTrackingNode(Node):
         if command.is_valid:
             self.publish_command(command)
             self._publish_virtual_target()
+        else:
+            # Hedef yoksa güvenli loiter komutu gönder
+            self._publish_safe_loiter_command()
         
         # ----------------------------------------------------------------
         # 4. İSTATİSTİK GÜNCELLE
@@ -698,7 +820,10 @@ class GPSTrackingNode(Node):
     
     def publish_command(self, command: GuidanceCommand):
         """
-        PX4'e TrajectorySetpoint yayınla
+        PX4'e TrajectorySetpoint yayınla (Fixed-Wing Velocity Modu)
+        
+        Fixed-wing uçaklar için position setpoint kullanılamaz.
+        Bunun yerine velocity setpoint ve heading kullanılır.
         """
         if not PX4_MSGS_AVAILABLE:
             return
@@ -707,17 +832,34 @@ class GPSTrackingNode(Node):
         msg = TrajectorySetpoint()
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)  # Mikrosaniye
         
-        # Velocity setpoint (NED frame)
-        msg.velocity[0] = command.velocity_north
-        msg.velocity[1] = command.velocity_east
-        msg.velocity[2] = command.velocity_down
-        
-        # Position NaN (velocity modunda)
+        # Position NaN (velocity modunda kullanılmaz)
         msg.position[0] = float('nan')
         msg.position[1] = float('nan')
         msg.position[2] = float('nan')
         
-        # Yaw setpoint
+        # Velocity setpoint hesapla (pozisyon farkından)
+        # Hedef noktaya doğru hız vektörü oluştur
+        dx = command.position_north - self.own_state.x
+        dy = command.position_east - self.own_state.y
+        dz = command.position_down - self.own_state.z
+        
+        # Mesafeye göre hız büyüklüğünü ayarla
+        dist_2d = math.sqrt(dx**2 + dy**2)
+        if dist_2d > 1.0:
+            # Normalize et ve airspeed ile çarp
+            scale = command.airspeed_setpoint / dist_2d
+            msg.velocity[0] = dx * scale  # North velocity
+            msg.velocity[1] = dy * scale  # East velocity
+        else:
+            # Hedefe çok yakınsa mevcut yönde devam et
+            msg.velocity[0] = command.airspeed_setpoint * math.cos(command.yaw_setpoint)
+            msg.velocity[1] = command.airspeed_setpoint * math.sin(command.yaw_setpoint)
+        
+        # Vertical velocity (irtifa kontrolü)
+        alt_error = -dz  # Down pozitif = aşağı, irtifa hatası ters
+        msg.velocity[2] = float(np.clip(-alt_error * 0.5, -3.0, 3.0))  # Max 3 m/s climb/descend
+        
+        # Yaw setpoint - fixed-wing için course/heading
         msg.yaw = command.yaw_setpoint
         msg.yawspeed = float('nan')  # Yaw rate kullanmıyoruz
         
@@ -735,16 +877,19 @@ class GPSTrackingNode(Node):
         # Komut geçmişine ekle
         self.command_history.append({
             'time': self.get_clock().now().nanoseconds / 1e9,
-            'vn': command.velocity_north,
-            've': command.velocity_east,
-            'vd': command.velocity_down,
-            'yaw': command.yaw_setpoint
+            'vel_n': msg.velocity[0],
+            'vel_e': msg.velocity[1],
+            'vel_d': msg.velocity[2],
+            'yaw': command.yaw_setpoint,
+            'airspeed': command.airspeed_setpoint
         })
     
     def offboard_heartbeat_callback(self):
         """
         PX4 Offboard heartbeat - sürekli gönderilmeli
         Aksi halde PX4 otomatik olarak manuel moda geçer
+        
+        Fixed-wing için velocity control modu kullanılır.
         """
         if not PX4_MSGS_AVAILABLE:
             return
@@ -752,14 +897,115 @@ class GPSTrackingNode(Node):
         msg = OffboardControlMode()
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
         
-        # Velocity kontrol modu
+        # Fixed-wing için velocity kontrol modu (position modda çalışmaz!)
         msg.position = False
-        msg.velocity = True
+        msg.velocity = True  # Fixed-wing için velocity modu
         msg.acceleration = False
         msg.attitude = False
         msg.body_rate = False
         
         self.offboard_mode_pub.publish(msg)
+        
+        # Setpoint sayacını artır
+        self.offboard_setpoint_counter += 1
+        
+        # İlk 150 setpoint'ten sonra offboard moda geç ve arm et
+        if self.offboard_setpoint_counter == 150:
+            self.get_logger().info("🚀 Offboard mod geçişi başlatılıyor...")
+            self._engage_offboard_mode()
+    
+    def _engage_offboard_mode(self):
+        """
+        PX4'ü offboard moduna geçir ve arm et.
+        Bu fonksiyon yeterli sayıda setpoint gönderildikten sonra çağrılmalı.
+        """
+        if not PX4_MSGS_AVAILABLE:
+            return
+        
+        # 1. Offboard mod komutu gönder
+        self._send_vehicle_command(
+            VehicleCommand.VEHICLE_CMD_DO_SET_MODE,
+            param1=1.0,  # Custom mode
+            param2=6.0   # PX4_CUSTOM_MAIN_MODE_OFFBOARD
+        )
+        self.get_logger().info("📡 Offboard mod komutu gönderildi")
+        
+        # 2. ARM komutu gönder (zaten armed değilse)
+        if not self.armed:
+            self._send_vehicle_command(
+                VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM,
+                param1=1.0  # 1.0 = ARM, 0.0 = DISARM
+            )
+            self.get_logger().info("🔓 ARM komutu gönderildi")
+    
+    def _send_vehicle_command(self, command: int, param1: float = 0.0, 
+                               param2: float = 0.0, param3: float = 0.0,
+                               param4: float = 0.0, param5: float = 0.0,
+                               param6: float = 0.0, param7: float = 0.0):
+        """
+        PX4'e VehicleCommand gönder
+        """
+        if not PX4_MSGS_AVAILABLE:
+            return
+        
+        msg = VehicleCommand()
+        msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        msg.command = command
+        msg.param1 = param1
+        msg.param2 = param2
+        msg.param3 = param3
+        msg.param4 = param4
+        msg.param5 = param5
+        msg.param6 = param6
+        msg.param7 = param7
+        msg.target_system = 1
+        msg.target_component = 1
+        msg.source_system = 1
+        msg.source_component = 1
+        msg.from_external = True
+        
+        self.command_pub.publish(msg)
+    
+    def _publish_safe_loiter_command(self):
+        """
+        Hedef yokken güvenli loiter komutu gönder.
+        Fixed-wing için belirli bir hızda düz uçuş yapar.
+        Home pozisyonu olmadan da çalışır (offboard geçişi için).
+        """
+        if not PX4_MSGS_AVAILABLE:
+            return
+        
+        msg = TrajectorySetpoint()
+        msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+        
+        # Position NaN (velocity modunda kullanılmaz)
+        msg.position[0] = float('nan')
+        msg.position[1] = float('nan')
+        msg.position[2] = float('nan')
+        
+        # Mevcut heading'de düz uçuş (veya varsayılan kuzey yönü)
+        if self.own_state.heading != 0.0 or self.home_set:
+            current_heading_rad = math.radians(self.own_state.heading)
+        else:
+            current_heading_rad = 0.0  # Varsayılan: Kuzey yönü
+        
+        # Sabit hızda ileri uçuş
+        msg.velocity[0] = self.cruise_airspeed * math.cos(current_heading_rad)
+        msg.velocity[1] = self.cruise_airspeed * math.sin(current_heading_rad)
+        msg.velocity[2] = 0.0  # İrtifa koru
+        
+        msg.yaw = current_heading_rad
+        msg.yawspeed = float('nan')
+        
+        msg.acceleration[0] = float('nan')
+        msg.acceleration[1] = float('nan')
+        msg.acceleration[2] = float('nan')
+        
+        msg.jerk[0] = float('nan')
+        msg.jerk[1] = float('nan')
+        msg.jerk[2] = float('nan')
+        
+        self.trajectory_pub.publish(msg)
     
     def _publish_virtual_target(self):
         """
@@ -810,6 +1056,52 @@ class GPSTrackingNode(Node):
         msg = String()
         msg.data = str(debug_info)
         self.debug_pub.publish(msg)
+    
+    def _check_px4_connection(self):
+        """
+        PX4 bağlantı durumunu kontrol et ve kullanıcıya bilgi ver
+        """
+        status_parts = []
+        
+        # Local position verisi alındı mı?
+        local_pos_ok = hasattr(self, '_local_pos_received') and self._local_pos_received
+        status_parts.append(f"LocalPos: {'✓' if local_pos_ok else '✗'}")
+        
+        # Global position verisi alındı mı?
+        global_pos_ok = hasattr(self, '_global_pos_received') and self._global_pos_received
+        status_parts.append(f"GlobalPos: {'✓' if global_pos_ok else '✗'}")
+        
+        # Home set mi?
+        status_parts.append(f"Home: {'✓' if self.home_set else '✗'}")
+        
+        # Vehicle status alındı mı?
+        status_parts.append(f"Status: {'✓' if self.vehicle_status_received else '✗'}")
+        
+        # Offboard mod aktif mi?
+        status_parts.append(f"Offboard: {'✓' if self.offboard_mode_active else '✗'}")
+        
+        # Armed mı?
+        status_parts.append(f"Armed: {'✓' if self.armed else '✗'}")
+        
+        # Setpoint sayısı
+        status_parts.append(f"Setpoints: {self.offboard_setpoint_counter}")
+        
+        status_line = " | ".join(status_parts)
+        
+        if not local_pos_ok or not global_pos_ok:
+            self.get_logger().warn(f"📡 PX4 Bağlantı: {status_line}")
+            self.get_logger().warn("   ⚠️  PX4 SITL çalışıyor mu? Topic'ler:")
+            self.get_logger().warn("      /fmu/out/vehicle_local_position veya /fmu/out/vehicle_local_position_v1")
+            self.get_logger().warn("      /fmu/out/vehicle_global_position")
+        elif not self.home_set:
+            self.get_logger().info(f"📡 PX4 Bağlantı: {status_line}")
+            self.get_logger().warn("   ⚠️  GPS fix bekleniyor (home pozisyonu için)")
+        elif not self.offboard_mode_active:
+            self.get_logger().info(f"📡 PX4 Bağlantı: {status_line}")
+            self.get_logger().info("   ℹ️  Offboard mod için QGroundControl'den manuel geçiş yapın veya bekleyin")
+        else:
+            self.get_logger().info(f"📡 PX4 Bağlantı: {status_line}")
+            self.get_logger().info("   ✅ Sistem hazır - hedef takibi aktif")
 
 
 # ============================================================================

@@ -13,6 +13,9 @@ TEKNOFEST_WS="$HOME/teknofest_ws/src/teknofest_simulation"
 TEKNOFEST_MODELS="$TEKNOFEST_WS/models"
 WORLD_FILE="$TEKNOFEST_WS/worlds/competition.sdf"
 
+# Hero uçak için kameralı özel model
+HERO_MODEL="hero_cessna"
+
 AIRFRAME_ID=4003  # gz_rc_cessna
 LOG_DIR="/tmp/px4_multi_sim"
 
@@ -169,9 +172,9 @@ print_status() {
     done
     echo ""
     echo -e "${YELLOW}QGroundControl Bağlantıları:${NC}"
-    echo "  Uçak 0 (HERO):   udp://127.0.0.1:14540"
-    echo "  Uçak 1 (ENEMY1): udp://127.0.0.1:14541"
-    echo "  Uçak 2 (ENEMY2): udp://127.0.0.1:14542"
+    echo "  Uçak 1 (HERO):   udp://127.0.0.1:14540"
+    echo "  Uçak 2 (ENEMY1): udp://127.0.0.1:14541"
+    echo "  Uçak 3 (ENEMY2): udp://127.0.0.1:14542"
     echo ""
     echo -e "${YELLOW}QGC Ayarları:${NC}"
     echo "  1. QGroundControl açın"
@@ -225,7 +228,7 @@ echo -e "${YELLOW}[4/5]${NC} Uçaklar spawn ediliyor..."
 
 # HERO (GUCLU) - Ana uçak - KAMERALI
 #            Instance  Name      X    Y     Z     Yaw(rad)  Model
-launch_aircraft 0     "HERO"    0    0    0.3    0.698     "rc_cessna"
+launch_aircraft 0     "HERO"    0    0    0.3    0.698     "${HERO_MODEL}"
 sleep 15  # İlk uçak için daha uzun bekle
 
 # ENEMY 1 (KOUSTECH) - Sağda

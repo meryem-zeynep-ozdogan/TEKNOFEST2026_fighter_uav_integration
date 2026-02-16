@@ -230,18 +230,24 @@ class AircraftState:
 @dataclass
 class TargetScore:
     """
-    Hedef puanlama sonucu
+    Hedef puanlama sonucu - Geliştirilmiş versiyon
+    Birden fazla hedef arasından en uygun olanı seçmek için kullanılır.
     """
     target_id: int
     total_score: float
     distance_score: float
     angle_score: float
     speed_score: float
-    is_tail_position: bool      # Kuyruk pozisyonunda mıyız?
-    is_head_on: bool            # Kafa kafaya mı geliyor?
-    distance: float             # Metre cinsinden mesafe
-    bearing: float              # Hedefe olan açı (derece)
-    aspect_angle: float         # Görüş açısı (hedefin bize bakış açısı)
+    camera_fov_score: float = 0.0    # Kamera FOV'a uygunluk skoru
+    reachability_score: float = 0.0  # Ulaşılabilirlik skoru
+    is_tail_position: bool = False   # Kuyruk pozisyonunda mıyız?
+    is_head_on: bool = False         # Kafa kafaya mı geliyor?
+    is_in_camera_fov: bool = False   # Kamera görüş alanında mı?
+    estimated_intercept_time: float = float('inf')  # Tahmini yakalama süresi (saniye)
+    distance: float = 0.0            # Metre cinsinden mesafe
+    bearing: float = 0.0             # Hedefe olan açı (derece)
+    heading_diff: float = 0.0        # Başlık farkı (derece)
+    aspect_angle: float = 0.0        # Görüş açısı (hedefin bize bakış açısı)
 
 
 @dataclass 
@@ -285,13 +291,30 @@ class L1GuidanceParams:
 @dataclass
 class TargetSelectorParams:
     """Hedef seçim parametreleri"""
-    w_distance: float = 0.35        # Mesafe ağırlığı
-    w_angle: float = 0.45           # Açı ağırlığı
-    w_speed: float = 0.20           # Hız ağırlığı
+    # Ana ağırlıklar
+    w_distance: float = 0.25        # Mesafe ağırlığı
+    w_angle: float = 0.30           # Açı uygunluğu ağırlığı
+    w_speed: float = 0.15           # Hız ağırlığı
+    w_camera_fov: float = 0.20      # Kamera FOV'a uygunluk ağırlığı
+    w_reachability: float = 0.10    # Ulaşılabilirlik ağırlığı
     tail_bonus: float = 2.5         # Kuyruk pozisyonu bonusu
     head_on_penalty: float = 0.2    # Kafa kafaya cezası
     tail_cone: float = 45.0         # Kuyruk konisi yarı açısı (derece)
     head_on_cone: float = 30.0      # Kafa kafaya konisi yarı açısı (derece)
+    
+    # Kamera FOV parametreleri
+    camera_fov_horizontal: float = 80.0   # Yatay FOV (derece)
+    camera_fov_vertical: float = 60.0     # Dikey FOV (derece)
+    camera_optimal_distance: float = 50.0 # Optimal görüntüleme mesafesi (metre)
+    camera_max_distance: float = 200.0    # Maksimum görüntüleme mesafesi (metre)
+    
+    # Hysteresis (mevcut hedefe tutunma)
+    current_target_bonus: float = 1.5     # Mevcut hedefe verilen bonus çarpanı
+    min_score_diff_to_switch: float = 0.3 # Hedef değiştirmek için minimum skor farkı
+    
+    # Manevra değerlendirme
+    max_intercept_time: float = 60.0      # Maksimum yakalama süresi (saniye)
+    own_max_speed: float = 35.0           # Kendi maksimum hızımız (m/s)
 
 
 @dataclass
@@ -580,6 +603,11 @@ class CommandSmoother:
         """
         smoothed = GuidanceCommand(is_valid=True)
         
+        # Position değerlerini koru (smoother bunları değiştirmemeli)
+        smoothed.position_north = command.position_north
+        smoothed.position_east = command.position_east
+        smoothed.position_down = command.position_down
+        
         # Velocity smoothing
         smoothed.velocity_north = self.vn_lpf.filter(command.velocity_north)
         smoothed.velocity_east = self.ve_lpf.filter(command.velocity_east)
@@ -622,104 +650,274 @@ class CommandSmoother:
 
 
 # ============================================================================
-# HEDEF SEÇİM ALGORİTMASI
+# HEDEF SEÇİM ALGORİTMASI - GELİŞTİRİLMİŞ SÜRÜM
 # ============================================================================
 
 class WeightedTargetSelector:
     """
-    Ağırlıklı puanlama ile hedef seçim algoritması
+    Geliştirilmiş Ağırlıklı Hedef Seçim Algoritması
+    
+    Bu algoritma birden fazla hedef arasından en uygun olanı seçer.
+    Hedef seçimi şu kriterlere göre yapılır:
+    
+    1. Mesafe Skoru: Yakın hedefler tercih edilir
+    2. Açı Skoru: Kuyruk pozisyonundaki hedefler yüksek puan alır
+    3. Hız Skoru: Yavaş hedefler (yakalanabilir) tercih edilir
+    4. Kamera FOV Skoru: Kamera görüş açısına uygun hedefler tercih edilir
+    5. Ulaşılabilirlik Skoru: Yakalama süresi makul olan hedefler tercih edilir
+    
+    Ayrıca mevcut hedefe "hysteresis" bonusu uygulanarak gereksiz
+    hedef değişimleri önlenir.
     
     Formül:
-    Score = (W1 * 1/Distance) + (W2 * Angle_Factor) + (W3 * Speed_Factor)
+    Score = W1*Distance + W2*Angle + W3*Speed + W4*CameraFOV + W5*Reachability
     """
     
     def __init__(self, params: Optional[TargetSelectorParams] = None):
         self.params = params or TargetSelectorParams()
+        self.current_target_id: int = -1  # Mevcut kilitli hedef ID
+        self.all_scores: List[TargetScore] = []  # Debug için tüm skorlar
     
     def select_best_target(self, own_state: AircraftState, 
-                           targets: Dict[int, AircraftState]) -> Optional[TargetScore]:
+                           targets: Dict[int, AircraftState],
+                           current_target_id: int = -1) -> Optional[TargetScore]:
         """
-        Tüm hedefleri puanla ve en iyisini seç
+        Tüm hedefleri puanla ve en uygun olanını seç
+        
+        Hysteresis: Mevcut hedefe bonus verilerek gereksiz hedef 
+        değişimleri önlenir. Yeni hedefin skoru, mevcut hedefin
+        skorundan belirli bir fark kadar yüksek olmalıdır.
         
         Args:
             own_state: Kendi uçağımızın durumu
             targets: Hedef uçak listesi (id -> AircraftState)
+            current_target_id: Şu an takip edilen hedef ID (-1 = yok)
         
         Returns:
             En yüksek puanlı hedefin TargetScore objesi veya None
         """
         if not targets:
+            self.all_scores = []
             return None
+        
+        self.current_target_id = current_target_id
         
         own_pos = own_state.get_position_ned()
         own_heading = own_state.heading
         own_speed = own_state.get_speed_2d()
+        own_vel = own_state.get_velocity_vector()
         
         scores: List[TargetScore] = []
         
-        for _, target in targets.items():
-            score = self.calculate_score(target, own_pos, own_heading, own_speed)
+        for target_id, target in targets.items():
+            score = self.calculate_score(
+                target=target,
+                own_pos=own_pos,
+                own_heading=own_heading,
+                own_speed=own_speed,
+                own_vel=own_vel,
+                is_current_target=(target_id == current_target_id)
+            )
             scores.append(score)
         
+        # Skorlara göre sırala (yüksekten düşüğe)
         scores.sort(key=lambda x: x.total_score, reverse=True)
+        self.all_scores = scores
         
-        return scores[0] if scores else None
+        if not scores:
+            return None
+        
+        best_score = scores[0]
+        
+        # Hysteresis kontrolü - mevcut hedefe tutunma
+        if current_target_id >= 0:
+            current_target_score = None
+            for s in scores:
+                if s.target_id == current_target_id:
+                    current_target_score = s
+                    break
+            
+            if current_target_score is not None:
+                # Yeni hedef yeterince iyi değilse mevcut hedefe devam et
+                score_diff = best_score.total_score - current_target_score.total_score
+                if score_diff < self.params.min_score_diff_to_switch:
+                    return current_target_score
+        
+        return best_score
     
     def calculate_score(self, target: AircraftState,
                         own_pos: np.ndarray,
-                        _own_heading: float,
-                        own_speed: float) -> TargetScore:
+                        own_heading: float,
+                        own_speed: float,
+                        own_vel: np.ndarray,
+                        is_current_target: bool = False) -> TargetScore:
         """
-        Tek bir hedef için ağırlıklı skor hesapla
+        Tek bir hedef için detaylı skor hesapla
         
         Args:
             target: Hedef uçak durumu
             own_pos: Kendi NED pozisyonumuz
-            _own_heading: Kendi başlık açımız (şu an kullanılmıyor, ileride eklenebilir)
+            own_heading: Kendi başlık açımız (derece)
             own_speed: Kendi 2D hızımız
+            own_vel: Kendi hız vektörümüz (NED)
+            is_current_target: Bu hedef şu an takip edilen mi?
         """
         p = self.params
         target_pos = target.get_position_ned()
+        target_vel = target.get_velocity_vector()
         
-        # 1. MESAFE SKORU
+        # ================================================================
+        # 1. MESAFE SKORU (0-1 arası normalize)
+        # ================================================================
         distance = calculate_distance_3d(own_pos, target_pos)
-        distance = max(distance, 10.0)  # Sıfıra bölmeyi önle
-        distance_score = 1.0 / (1.0 + (distance / 100.0))
+        distance = max(distance, 5.0)  # Sıfıra bölmeyi önle
         
-        # 2. AÇI UYGUNLUĞU SKORU
+        # Sigmoid benzeri fonksiyon - yakın mesafeler yüksek skor alır
+        # Optimal mesafe civarında maksimum skor
+        if distance < p.camera_optimal_distance:
+            distance_score = 1.0
+        elif distance < p.camera_max_distance:
+            # Optimal mesafeden uzaklaştıkça azalan skor
+            distance_score = 1.0 - ((distance - p.camera_optimal_distance) / 
+                                   (p.camera_max_distance - p.camera_optimal_distance))
+        else:
+            # Çok uzak hedefler düşük skor
+            distance_score = max(0.1, 100.0 / distance)
+        
+        # ================================================================
+        # 2. AÇI UYGUNLUĞU SKORU (kuyruk pozisyonu analizi)
+        # ================================================================
+        # Hedefe olan bearing (bizden hedefe)
         bearing = calculate_bearing(own_pos[0], own_pos[1], 
                                    target_pos[0], target_pos[1])
         
+        # Hedefin bize bakış açısı (reverse bearing)
         reverse_bearing = calculate_bearing(target_pos[0], target_pos[1],
                                            own_pos[0], own_pos[1])
         
+        # Aspect angle: Hedefin burnundan bize olan açı
+        # 0° = kuyruğundayız (ideal), 180° = kafa kafaya
         aspect_angle = abs(normalize_angle(target.heading - reverse_bearing))
+        
+        # Heading difference: Bizim hedefe dönmemiz gereken açı
+        heading_diff = abs(normalize_angle(bearing - own_heading))
         
         is_tail = aspect_angle < p.tail_cone
         is_head_on = aspect_angle > (180 - p.head_on_cone)
         
         if is_tail:
+            # Kuyruk pozisyonu - en iyi durum
             angle_score = p.tail_bonus
         elif is_head_on:
+            # Kafa kafaya - tehlikeli, düşük skor
             angle_score = p.head_on_penalty
         else:
-            angle_score = 1.0 - (abs(aspect_angle - 90) / 90.0)
+            # Yan pozisyon - mesafeye bağlı orta skor
+            # 90 dereceye yakın açılar makul
+            angle_score = 1.0 - (abs(aspect_angle - 90) / 90.0) * 0.5
         
+        # Heading farkı cezası - çok fazla dönmemiz gerekiyorsa düşük skor
+        heading_penalty = 1.0 - (heading_diff / 180.0) * 0.3
+        angle_score *= heading_penalty
+        
+        # ================================================================
         # 3. HIZ FAKTÖRÜ SKORU
+        # ================================================================
         target_speed = target.ground_speed
         speed_diff = own_speed - target_speed
         
         if speed_diff > 0:
-            speed_score = min(1.0 + speed_diff / 10.0, 2.0)
+            # Biz daha hızlıyız - yakalayabiliriz
+            speed_score = min(1.0 + speed_diff / 15.0, 2.0)
         else:
-            speed_score = max(0.3, 1.0 + speed_diff / 20.0)
+            # Hedef daha hızlı - yakalamak zor
+            speed_score = max(0.2, 1.0 + speed_diff / 30.0)
         
-        # TOPLAM SKOR
-        total_score = (
+        # ================================================================
+        # 4. KAMERA FOV UYGUNLUK SKORU
+        # ================================================================
+        # Hedefin kamera görüş alanına girmesi ne kadar muhtemel?
+        
+        # Hedefe olan açı, bizim heading'imizden ne kadar sapıyor?
+        fov_angle_diff = abs(normalize_angle(bearing - own_heading))
+        half_fov = p.camera_fov_horizontal / 2.0
+        
+        if fov_angle_diff <= half_fov:
+            # Hedef şu an FOV içinde
+            camera_fov_score = 1.5  # Bonus
+            is_in_camera_fov = True
+        elif fov_angle_diff <= half_fov * 1.5:
+            # FOV'a yakın - küçük manevra ile girer
+            camera_fov_score = 1.0
+            is_in_camera_fov = False
+        elif fov_angle_diff <= half_fov * 2.5:
+            # Orta düzey manevra gerekli
+            camera_fov_score = 0.6
+            is_in_camera_fov = False
+        else:
+            # Büyük manevra gerekli
+            camera_fov_score = 0.3
+            is_in_camera_fov = False
+        
+        # FOV içinde olmak için ideal mesafe değerlendirmesi
+        if distance < 20:
+            # Çok yakın - FOV'dan çıkabilir
+            camera_fov_score *= 0.8
+        elif distance > p.camera_max_distance:
+            # Çok uzak - görüntü kalitesi düşük
+            camera_fov_score *= 0.5
+        
+        # ================================================================
+        # 5. ULAŞILABİLİRLİK SKORU (Intercept Time)
+        # ================================================================
+        # Basit yakalama süresi tahmini
+        relative_velocity = own_vel - target_vel
+        relative_pos = target_pos - own_pos
+        
+        # Closing speed (yaklaşma hızı)
+        if np.linalg.norm(relative_velocity) > 0.1:
+            closing_speed = -np.dot(relative_pos, relative_velocity) / np.linalg.norm(relative_pos)
+        else:
+            closing_speed = 0.1
+        
+        if closing_speed > 1.0:
+            # Hedefe yaklaşıyoruz
+            estimated_intercept_time = distance / closing_speed
+            
+            if estimated_intercept_time < 10:
+                reachability_score = 1.5  # Çok yakın yakalama
+            elif estimated_intercept_time < 30:
+                reachability_score = 1.2  # İyi yakalama süresi
+            elif estimated_intercept_time < p.max_intercept_time:
+                reachability_score = 1.0 - ((estimated_intercept_time - 30) / 
+                                           (p.max_intercept_time - 30)) * 0.5
+            else:
+                reachability_score = 0.3  # Çok uzun süre
+        else:
+            # Hedef bizden uzaklaşıyor
+            estimated_intercept_time = float('inf')
+            # Hız avantajımız varsa yine de yakalayabiliriz
+            if speed_diff > 5:
+                reachability_score = 0.6
+            else:
+                reachability_score = 0.2
+        
+        # ================================================================
+        # TOPLAM SKOR HESAPLAMASI
+        # ================================================================
+        base_score = (
             p.w_distance * distance_score +
             p.w_angle * angle_score +
-            p.w_speed * speed_score
+            p.w_speed * speed_score +
+            p.w_camera_fov * camera_fov_score +
+            p.w_reachability * reachability_score
         )
+        
+        # Mevcut hedefe hysteresis bonusu
+        if is_current_target:
+            total_score = base_score * p.current_target_bonus
+        else:
+            total_score = base_score
         
         return TargetScore(
             target_id=target.id,
@@ -727,11 +925,35 @@ class WeightedTargetSelector:
             distance_score=distance_score,
             angle_score=angle_score,
             speed_score=speed_score,
+            camera_fov_score=camera_fov_score,
+            reachability_score=reachability_score,
             is_tail_position=is_tail,
             is_head_on=is_head_on,
+            is_in_camera_fov=is_in_camera_fov,
+            estimated_intercept_time=estimated_intercept_time,
             distance=distance,
             bearing=bearing,
+            heading_diff=heading_diff,
             aspect_angle=aspect_angle
+        )
+    
+    def get_all_scores(self) -> List[TargetScore]:
+        """Debug için tüm hedef skorlarını döndür"""
+        return self.all_scores
+    
+    def get_score_breakdown(self, score: TargetScore) -> str:
+        """Skor detaylarını okunabilir string olarak döndür"""
+        return (
+            f"Hedef {score.target_id}: "
+            f"Toplam={score.total_score:.2f} "
+            f"[Mesafe={score.distance_score:.2f}, "
+            f"Açı={score.angle_score:.2f}, "
+            f"Hız={score.speed_score:.2f}, "
+            f"FOV={score.camera_fov_score:.2f}, "
+            f"Ulaşılabilirlik={score.reachability_score:.2f}] "
+            f"Mesafe={score.distance:.1f}m, "
+            f"FOV={'✓' if score.is_in_camera_fov else '✗'}, "
+            f"Kuyruk={'✓' if score.is_tail_position else '✗'}"
         )
 
 
@@ -1100,6 +1322,7 @@ class L1Guidance:
         self.locked_target: Optional[AircraftState] = None
         self.target_switch_time: float = 0.0
         self.target_switch_cooldown: float = 3.0
+        self.last_target_score: Optional[TargetScore] = None  # Son hedef skoru
     
     def update(self, own_state: AircraftState,
                targets: Dict[int, AircraftState],
@@ -1115,18 +1338,27 @@ class L1Guidance:
         Returns:
             GuidanceCommand objesi
         """
-        # 1. Hedef seçimi
+        # 1. Hedef seçimi (geliştirilmiş versiyon - hysteresis ile)
         if targets:
-            best_target = self.target_selector.select_best_target(own_state, targets)
+            # Mevcut hedef ID'sini geçirerek hysteresis uygula
+            best_target = self.target_selector.select_best_target(
+                own_state=own_state, 
+                targets=targets,
+                current_target_id=self.locked_target_id
+            )
             
             if best_target is not None:
+                # Hedef değişikliği kontrolü
                 if self.locked_target_id != best_target.target_id:
                     if current_time - self.target_switch_time > self.target_switch_cooldown:
                         self._switch_target(best_target.target_id, current_time)
+                        self.last_target_score = best_target
                 
                 self.locked_target = targets.get(self.locked_target_id)
+                self.last_target_score = best_target
         else:
             self.locked_target = None
+            self.last_target_score = None
         
         # 2. Durum makinesi güncelle
         if self.locked_target is not None:
@@ -1185,3 +1417,29 @@ class L1Guidance:
     def get_cross_track_error(self) -> float:
         """Cross-track error döndür"""
         return self.l1_controller.get_cross_track_error()
+    
+    def get_target_score(self) -> Optional[TargetScore]:
+        """Mevcut hedefin skor bilgisini döndür"""
+        return self.last_target_score
+    
+    def get_all_target_scores(self) -> List[TargetScore]:
+        """Tüm hedeflerin skor listesini döndür (debug için)"""
+        return self.target_selector.get_all_scores()
+    
+    def get_score_breakdown_str(self) -> str:
+        """Mevcut hedefin skor detaylarını string olarak döndür"""
+        if self.last_target_score:
+            return self.target_selector.get_score_breakdown(self.last_target_score)
+        return "Hedef yok"
+    
+    def is_target_in_camera_fov(self) -> bool:
+        """Hedef kamera görüş alanında mı?"""
+        if self.last_target_score:
+            return self.last_target_score.is_in_camera_fov
+        return False
+    
+    def get_estimated_intercept_time(self) -> float:
+        """Tahmini yakalama süresini döndür (saniye)"""
+        if self.last_target_score:
+            return self.last_target_score.estimated_intercept_time
+        return float('inf')

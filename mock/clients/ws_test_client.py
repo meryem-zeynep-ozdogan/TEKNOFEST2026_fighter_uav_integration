@@ -10,7 +10,7 @@ sio = socketio.Client()
 @sio.event
 def connect():
     print("\n🔗 Bağlantı kuruldu! Drone'lar başlatılıyor...\n")
-
+    
     # Server ile uyumlu son senaryolar:
     # bizim_iha  → hss_approach
     # rakip_1   → hss_approach

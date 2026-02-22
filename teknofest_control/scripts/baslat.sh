@@ -181,7 +181,7 @@ case $MODE in
         echo -e "${GREEN}▶ GPS Tracking Node başlatılıyor...${NC}"
         ros2 run teknofest_control gps_tracking_node \
             --ros-args \
-            -p l1_guidance.l1_distance:=50.0 \
+            -p l1_guidance.l1_distance:=0.0 \
             -p l1_guidance.adaptive_l1:=true \
             -p aircraft_limits.cruise_airspeed:=22.0 \
             -p px4.control_frequency:=50.0
@@ -208,7 +208,7 @@ case $MODE in
         ros2 run teknofest_control gps_tracking_node \
             --ros-args \
             $REMAP_ARGS \
-            -p l1_guidance.l1_distance:=50.0 \
+            -p l1_guidance.l1_distance:=0.0 \
             -p l1_guidance.adaptive_l1:=true \
             -p aircraft_limits.min_airspeed:=15.0 \
             -p aircraft_limits.max_airspeed:=35.0 \
@@ -234,7 +234,7 @@ case $MODE in
         echo -e "${GREEN}▶ GPS Tracking Node başlatılıyor...${NC}"
         ros2 run teknofest_control gps_tracking_node \
             --ros-args \
-            -p l1_guidance.l1_distance:=50.0 \
+            -p l1_guidance.l1_distance:=0.0 \
             -p l1_guidance.adaptive_l1:=true \
             -p aircraft_limits.min_airspeed:=15.0 \
             -p aircraft_limits.max_airspeed:=35.0 \

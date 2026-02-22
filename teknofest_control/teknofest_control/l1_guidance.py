@@ -277,13 +277,13 @@ class GuidanceCommand:
 @dataclass
 class L1GuidanceParams:
     """L1 Guidance parametreleri"""
-    l1_distance: float = 50.0       # L1 mesafesi (metre)
+    l1_distance: float = -10.0       # L1 mesafesi (metre)
     l1_damping: float = 0.85        # Sönümleme faktörü
     l1_period: float = 25.0         # L1 periyodu
     adaptive_l1: bool = True        # Adaptif L1 mesafesi
     min_airspeed: float = 15.0      # Minimum hava hızı (m/s)
-    max_airspeed: float = 35.0      # Maksimum hava hızı (m/s)
-    cruise_airspeed: float = 22.0   # Seyir hava hızı (m/s)
+    max_airspeed: float = 40.0      # Maksimum hava hızı (m/s)
+    cruise_airspeed: float = 30.0   # Seyir hava hızı (m/s)
     max_bank_angle: float = 45.0    # Maksimum bank açısı (derece)
     loiter_radius: float = 40.0     # Loiter yarıçapı (metre)
 
@@ -313,8 +313,8 @@ class TargetSelectorParams:
     min_score_diff_to_switch: float = 0.3 # Hedef değiştirmek için minimum skor farkı
     
     # Manevra değerlendirme
-    max_intercept_time: float = 60.0      # Maksimum yakalama süresi (saniye)
-    own_max_speed: float = 35.0           # Kendi maksimum hızımız (m/s)
+    max_intercept_time: float = 1000.0      # Maksimum yakalama süresi (saniye)
+    own_max_speed: float = 40.0           # Kendi maksimum hızımız (m/s)
 
 
 @dataclass
@@ -1014,9 +1014,6 @@ class TrackingStateMachine:
             if distance < p.lock_distance * 0.8:
                 self._change_state(TrackingState.LOCKED)
                 self.lock_start_time = current_time
-            elif distance < p.loiter_trigger:
-                # Çok yakınsa tehlikeli - loiter'a geç
-                self._change_state(TrackingState.LOITERING)
             elif distance > p.lock_distance * 1.3:
                 # Hedef uzaklaştıysa yaklaşmaya geri dön
                 self._change_state(TrackingState.APPROACHING)
@@ -1028,9 +1025,6 @@ class TrackingStateMachine:
                 self._change_state(TrackingState.PURSUING)
                 self.lock_start_time = None
                 self.lock_confirmed = False
-            elif distance < p.loiter_trigger:
-                # Çok yaklaştık - loiter'a geç
-                self._change_state(TrackingState.LOITERING)
             else:
                 # Kilit onay kontrolü
                 if self.lock_start_time is not None:
@@ -1039,8 +1033,8 @@ class TrackingStateMachine:
                         self.lock_confirmed = True
         
         elif self.current_state == TrackingState.LOITERING:
-            if distance > p.loiter_trigger * 2:
-                self._change_state(TrackingState.PURSUING)
+            # Loitering'den her zaman PURSUING'e dön
+            self._change_state(TrackingState.PURSUING)
         
         return self.current_state
     
@@ -1124,9 +1118,16 @@ class L1GuidanceController:
             
             if p.adaptive_l1:
                 l1_dist = p.l1_distance * (1 + target_speed / 30.0)
-                l1_dist = float(np.clip(l1_dist, 30.0, 100.0))
+                l1_dist = float(np.clip(l1_dist, p.l1_distance, 100.0))
             else:
                 l1_dist = p.l1_distance
+            
+            # KRİTİK: Sanal hedefin her zaman uçakla hedef ARASINDA kalmasını sağla.
+            # l1_dist mevcut mesafeden büyük olursa sanal nokta uçağın arkasına düşer
+            # ve LOS vektörü tersine dönerek uçak geri çekilir.
+            own_to_target_dist = float(np.linalg.norm(target_pos[:2] - own_pos[:2]))
+            max_l1 = own_to_target_dist * 0.4
+            l1_dist = min(l1_dist, max_l1)
             
             virtual_target_2d = target_pos[:2] - l1_dist * target_heading_vec
             virtual_target_z = target_pos[2]
@@ -1171,7 +1172,7 @@ class L1GuidanceController:
         eta = normalize_angle(math.degrees(eta))
         eta = math.radians(eta)
         
-        l1_accel = 2 * (own_speed ** 2) / l1_dist * math.sin(eta)
+        l1_accel = 2 * (own_speed ** 2) / max(l1_dist, 1.0) * math.sin(eta)
         
         g = 9.81
         commanded_bank = math.atan(l1_accel / g)
@@ -1190,18 +1191,28 @@ class L1GuidanceController:
         # 5. KOMUT OLUŞTUR (Position Setpoint)
         desired_heading = los_angle + self.crab_angle
         
-        # Hız büyüklüğü (airspeed için)
-        if los_distance > 100:
+        # Hız büyüklüğü - kuyruk takibi için mesafeye göre ayarla
+        # Gerçek hedefe olan 2D mesafe
+        real_dist = float(np.linalg.norm(target_pos[:2] - own_pos[:2]))
+
+        if real_dist > 30.0:
+            # Uzakta: maksimum hızla yaklaş
             speed_cmd = p.max_airspeed
-        elif los_distance > 50:
-            speed_cmd = p.cruise_airspeed + (p.max_airspeed - p.cruise_airspeed) * \
-                       (los_distance - 50) / 50
+        elif real_dist > 10.0:
+            # Orta mesafe: hedef hızı + yakalama artışı
+            catchup = (real_dist - 10.0) / 20.0  # 0.0→1.0
+            speed_cmd = target_speed + 3.0 + catchup * (p.max_airspeed - target_speed - 3.0)
+        elif real_dist > 2.0:
+            # Yakın: hedef hızına eşle + küçük artış (arkasında kal)
+            speed_cmd = target_speed + 1.0
         else:
+            # Çok yakın: tam hedef hızı (ne yaklaş ne uzaklaş)
+            speed_cmd = target_speed
+
+        if target_speed <= 0:
+            # Hedef duruyorsa cruise hızında devam et
             speed_cmd = p.cruise_airspeed
-        
-        if target_speed > 0:
-            speed_cmd = max(speed_cmd, target_speed + 3.0)
-        
+
         speed_cmd = float(np.clip(speed_cmd, p.min_airspeed, p.max_airspeed))
         
         command = GuidanceCommand(is_valid=True)

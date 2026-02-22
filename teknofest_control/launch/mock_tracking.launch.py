@@ -80,7 +80,7 @@ def generate_launch_description():
             'weights.angle': 0.45,
             'weights.speed': 0.20,
             # L1 Guidance
-            'l1_guidance.l1_distance': 50.0,
+            'l1_guidance.l1_distance': 0.0,
             'l1_guidance.l1_damping': 0.85,
             'l1_guidance.adaptive_l1': True,
             # Durum makinesi

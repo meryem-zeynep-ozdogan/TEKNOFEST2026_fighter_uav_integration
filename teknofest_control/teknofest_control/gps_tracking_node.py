@@ -241,9 +241,9 @@ class GPSTrackingNode(Node):
         self.declare_parameter('angle_scoring.head_on_cone_half_angle', 30.0)
         
         # L1 Guidance
-        self.declare_parameter('l1_guidance.l1_distance', 50.0)
+        self.declare_parameter('l1_guidance.l1_distance', 0.0)
         self.declare_parameter('l1_guidance.l1_damping', 0.85)
-        self.declare_parameter('l1_guidance.l1_period', 25.0)
+        self.declare_parameter('l1_guidance.l1_period', 10.0)
         self.declare_parameter('l1_guidance.adaptive_l1', True)
         
         # Uçak limitleri
@@ -263,7 +263,7 @@ class GPSTrackingNode(Node):
         # Durum makinesi
         self.declare_parameter('state_machine.lock_distance', 80.0)
         self.declare_parameter('state_machine.approach_distance', 150.0)
-        self.declare_parameter('state_machine.loiter_trigger_distance', 25.0)
+        self.declare_parameter('state_machine.loiter_trigger_distance', 5.0)
         self.declare_parameter('state_machine.lock_confirmation_time', 4.0)
         
         # PX4
@@ -1219,21 +1219,21 @@ class GPSTrackingNode(Node):
         
         msg = TrajectorySetpoint()
         msg.timestamp = int(self.get_clock().now().nanoseconds / 1000)
+         # Mevcut heading'de düz uçuş (veya varsayılan kuzey yönü)
+        if self.own_state.heading != 0.0 or self.home_set:
+            current_heading_rad = math.radians(self.own_state.heading)
+        else:
+            current_heading_rad = 0.0  # Varsayılan: Kuzey yönü
         
         # Position NaN (velocity modunda kullanılmaz)
         msg.position[0] = float('nan')
         msg.position[1] = float('nan')
         msg.position[2] = float('nan')
         
-        # Mevcut heading'de düz uçuş (veya varsayılan kuzey yönü)
-        if self.own_state.heading != 0.0 or self.home_set:
-            current_heading_rad = math.radians(self.own_state.heading)
-        else:
-            current_heading_rad = 0.0  # Varsayılan: Kuzey yönü
-        
+       
         # Sabit hızda ileri uçuş
-        msg.velocity[0] = self.cruise_airspeed * math.cos(current_heading_rad)
-        msg.velocity[1] = self.cruise_airspeed * math.sin(current_heading_rad)
+        msg.velocity[0] = self.cruise_airspeed * math.cos(current_heading_rad)  
+        msg.velocity[1] = self.cruise_airspeed * math.sin(current_heading_rad)  
         msg.velocity[2] = 0.0  # İrtifa koru
         
         msg.yaw = current_heading_rad

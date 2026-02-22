@@ -9,7 +9,7 @@ gps_tracking_node:
     # ==========================================
     # Toplam ağırlık = 1.0 olmalı (normalize edilmiş)
     weights:
-      distance: 0.25        # W1: Mesafe ağırlığı (yakın hedef tercih)
+      distance: 0.15       # W1: Mesafe ağırlığı (yakın hedef tercih)
       angle: 0.30           # W2: Açı uygunluğu ağırlığı (kuyruk açısı bonus)
       speed: 0.15           # W3: Hız faktörü ağırlığı (yavaş hedef tercih)
       camera_fov: 0.20      # W4: Kamera FOV'a uygunluk ağırlığı
@@ -39,9 +39,9 @@ gps_tracking_node:
     # L1 GUIDANCE PARAMETRELERİ
     # ==========================================
     l1_guidance:
-      l1_distance: 50.0           # L1 referans mesafesi (metre) - hedefin gerisinde
+      l1_distance: 0.0            # L1 referans mesafesi (metre) - hedefin gerisinde
       l1_damping: 0.85            # Sönümleme faktörü (0.7-0.9 arası)
-      min_l1_distance: 30.0       # Minimum L1 mesafesi
+      min_l1_distance: 10.0       # Minimum L1 mesafesi
       max_l1_distance: 100.0      # Maksimum L1 mesafesi
       adaptive_l1: true           # Hıza bağlı adaptif L1
       l1_period: 25.0             # L1 periyodu (saniye) - tepki hızı
@@ -78,7 +78,7 @@ gps_tracking_node:
       # Mesafe eşikleri (metre)
       lock_distance: 80.0          # Kilitlenme başlama mesafesi
       approach_distance: 150.0     # Yaklaşma fazı mesafesi
-      loiter_trigger_distance: 10.0  # Loiter tetikleme (çok yakın)
+      loiter_trigger_distance: 0.0  # Loiter tetikleme (çok yakın)
       lost_target_distance: 300.0  # Hedef kayıp sayılma mesafesi
       
       # Zaman eşikleri (saniye)

@@ -42,10 +42,10 @@ nearest_target_tracker:
     tracking_speed: 15.0
     
     # Yaklaşma mesafesi (metre) - bu mesafeden yakın olunca APPROACHING durumuna geçer
-    approach_distance: 50.0
+    approach_distance: 10.0
     
     # Kilit mesafesi (metre) - bu mesafeden yakın olunca LOCKED durumuna geçer
-    lock_distance: 20.0
+    lock_distance: 0.0
     
     # İrtifa ofseti (metre) - hedefin irtifasına eklenecek değer
     altitude_offset: 0.0
@@ -90,7 +90,7 @@ px4_to_mock_bridge:
 gps_tracking_node:
   ros__parameters:
     # L1 Guidance Parametreleri
-    l1_distance: 50.0           # L1 mesafesi (metre)
+    l1_distance: 0.0             # L1 mesafesi (metre)
     l1_damping: 0.75            # Sönümleme faktörü
     
     # Hız Limitleri
@@ -105,11 +105,11 @@ gps_tracking_node:
     
     # Takip Parametreleri
     lock_angle_threshold: 15.0  # Kilit açı eşiği (derece)
-    lock_distance_threshold: 30.0  # Kilit mesafe eşiği (metre)
+    lock_distance_threshold: 0.0  # Kilit mesafe eşiği (metre)
     
     # Güvenlik
     collision_avoidance_enabled: true
-    min_separation_distance: 20.0  # Minimum ayırma mesafesi (metre)
+    min_separation_distance: 0.0  # Minimum ayırma mesafesi (metre)
     
     # Debug
     debug_mode: false

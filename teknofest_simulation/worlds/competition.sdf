@@ -2,38 +2,16 @@
 <sdf version="1.9">
   <world name="competition">
     
-    <!-- ==================== SYSTEM PLUGINS ==================== -->
-    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics"/>
-    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands"/>
-    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster"/>
-    <plugin filename="gz-sim-sensors-system" name="gz::sim::systems::Sensors">
-      <render_engine>ogre2</render_engine>
-    </plugin>
-    <plugin filename="gz-sim-imu-system" name="gz::sim::systems::Imu"/>
-    <plugin filename="gz-sim-magnetometer-system" name="gz::sim::systems::Magnetometer"/>
-    <plugin filename="gz-sim-air-pressure-system" name="gz::sim::systems::AirPressure"/>
-    <plugin filename="gz-sim-navsat-system" name="gz::sim::systems::NavSat"/>
-    <plugin filename="gz-sim-altimeter-system" name="gz::sim::systems::Altimeter"/>
-    <plugin filename="gz-sim-apply-joint-force-system" name="gz::sim::systems::ApplyJointForce"/>
-    <plugin filename="gz-sim-contact-system" name="gz::sim::systems::Contact"/>
-    
-    <!-- Wind - başlangıçta kapalı, test sonrası açılabilir -->
-    <!-- <plugin filename="gz-sim-wind-effects-system" name="gz::sim::systems::WindEffects">
-      <force_approximation_scaling_factor>1</force_approximation_scaling_factor>
-    </plugin> -->
-
-    <!-- ==================== PHYSICS ==================== -->
     <physics type="ode">
       <max_step_size>0.004</max_step_size>
       <real_time_factor>1.0</real_time_factor>
       <real_time_update_rate>250</real_time_update_rate>
     </physics>
-
-    <!-- ==================== ENVIRONMENT ==================== -->
     <gravity>0 0 -9.8</gravity>
     <magnetic_field>6e-06 2.3e-05 -4.2e-05</magnetic_field>
-    <atmosphere type="adiabatic"/>
-
+    <atmosphere type='adiabatic'/>
+    
+    
     <!-- ==================== GPS COORDINATES ==================== -->
     <!-- Şanlıurfa GAP Havalimanı (LTCS) - Pist 04/22 -->
     <spherical_coordinates>
@@ -46,10 +24,12 @@
 
     <!-- ==================== SCENE ==================== -->
     <scene>
+      <ambient>0.8 0.5 1</ambient>
       <grid>false</grid>
-      <ambient>0.4 0.4 0.4 1</ambient>
-      <background>0.7 0.85 1.0 1</background>
-      <shadows>true</shadows>
+      <sky>
+        <clouds>true</clouds>
+      </sky>
+      <shadows>1</shadows>
     </scene>
 
     <!-- ==================== LIGHTING ==================== -->
@@ -164,12 +144,7 @@
       </link>
     </model>
 
-    <!-- ==================== QR TARGET ==================== -->
-    <include>
-      <uri>model://qr_target</uri>
-      <name>target_qr</name>
-      <pose>100 20 0.05 0 0 0</pose>
-    </include>
+    
 
   </world>
 </sdf>
